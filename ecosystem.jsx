@@ -1,0 +1,361 @@
+import { useState, useCallback, useMemo } from "react";
+
+const W = 900, H = 680;
+
+const UNITS = [
+  { id: "agency", label: "THE AGENCY", owner: "tapforce", short: "The Engine", x: 450, y: 230, r: 68, color: "#c8ff00", produces: ["Cash", "Team Talent", "Credibility", "Case Studies"] },
+  { id: "proper", label: "PROPER YELLOW", owner: "tapforce", short: "AI Video Studio", x: 170, y: 180, r: 46, color: "#ff6b35", produces: ["Creative Ads", "Promo Content", "Digital Products", "Event Attendance"] },
+  { id: "events", label: "EVENTS", owner: "tapforce", short: "Relationship Catalyst", x: 170, y: 340, r: 46, color: "#ff3366", produces: ["Agency Leads", "Creator Partners", "Deep Trust", "Higher-Ticket Closings"] },
+  { id: "creators", label: "CREATORS", owner: "tapforce", short: "Portfolio Multiplier", x: 330, y: 420, r: 46, color: "#a855f7", produces: ["Equity", "Deal Flow", "Expanded Audience", "Case Studies"] },
+  { id: "media", label: "MEDIA LAYER", owner: "damian", short: "Attention Engine", x: 730, y: 180, r: 46, color: "#06b6d4", produces: ["100M+ Views/mo", "Top-of-Funnel Traffic", "Oplined Applications", "Agency Leads", "Ad Revenue"] },
+  { id: "oplined", label: "OPLINED", owner: "damian", short: "Deal Flow Machine", x: 730, y: 340, r: 46, color: "#3b82f6", produces: ["Filtered Pipeline", "Venture Deal Flow", "Operator Placements", "Market Intelligence"] },
+  { id: "studio", label: "VENTURE STUDIO", owner: "shared", short: "The Endgame", x: 540, y: 420, r: 56, color: "#f0f0f0", produces: ["Owned IP", "Long-Term Equity", "Operator Demand", "Content Material"] },
+];
+
+const PORTFOLIO = [
+  { name: "HYBRID", vertical: "Commercial Lending" },
+  { name: "AMPLIFI", vertical: "SBA Lending" },
+  { name: "DISEASE DIR.", vertical: "Medical Platforms" },
+  { name: "NEXT BUILD", vertical: "TBD" },
+];
+
+const CONNECTIONS = [
+  { from: "agency", to: "studio", label: "cash + talent fund builds", loop: "client", pts: [[480, 298], [510, 370]] },
+  { from: "agency", to: "proper", label: "client work → raw creative", loop: "physical", pts: [[382, 215], [216, 185]] },
+  { from: "agency", to: "media", label: "case studies → content", loop: "distribution", pts: [[518, 215], [684, 185]] },
+  { from: "proper", to: "media", label: "raw material → dist-ready content", loop: "physical", pts: [[216, 165], [450, 120], [684, 165]] },
+  { from: "proper", to: "events", label: "content → event attendance", loop: "physical", pts: [[170, 226], [170, 294]] },
+  { from: "events", to: "agency", label: "in-person meetings close deals", loop: "physical", pts: [[216, 325], [382, 248]] },
+  { from: "events", to: "creators", label: "identify + close partners", loop: "creator", pts: [[210, 365], [290, 400]] },
+  { from: "creators", to: "agency", label: "audiences → higher-tier clients", loop: "creator", pts: [[355, 390], [420, 295]] },
+  { from: "creators", to: "studio", label: "equity + deal flow", loop: "creator", pts: [[370, 425], [490, 425]] },
+  { from: "media", to: "oplined", label: "100M+ views → applications", loop: "distribution", pts: [[730, 226], [730, 294]] },
+  { from: "media", to: "agency", label: "brand credibility → inbound", loop: "distribution", pts: [[684, 198], [518, 230]] },
+  { from: "oplined", to: "agency", label: "filtered applicants → clients", loop: "intelligence", pts: [[684, 325], [518, 248]] },
+  { from: "oplined", to: "studio", label: "top 1-2% → equity deals", loop: "intelligence", pts: [[690, 365], [590, 405]] },
+  { from: "oplined", to: "proper", label: "demand data → targeted creative", loop: "intelligence", pts: [[684, 355], [450, 490], [140, 355], [155, 225]] },
+  { from: "oplined", to: "media", label: "placement stories → content", loop: "intelligence", pts: [[755, 295], [755, 225]] },
+  { from: "studio", to: "media", label: "results → content", loop: "client", pts: [[590, 400], [700, 225]] },
+  { from: "studio", to: "oplined", label: "products need operators", loop: "client", pts: [[585, 440], [695, 365]] },
+];
+
+const LOOPS = [
+  { id: "all", label: "All Connections", color: "#ffffff" },
+  { id: "client", label: "Client Loop", color: "#c8ff00" },
+  { id: "creator", label: "Creator Loop", color: "#a855f7" },
+  { id: "distribution", label: "Distribution", color: "#06b6d4" },
+  { id: "physical", label: "Physical Loop", color: "#ff3366" },
+  { id: "intelligence", label: "Intelligence", color: "#3b82f6" },
+];
+
+function buildPath(from, to, pts) {
+  const f = UNITS.find(u => u.id === from);
+  const t = UNITS.find(u => u.id === to);
+  if (pts && pts.length > 0) {
+    let d = `M ${f.x} ${f.y}`;
+    for (const p of pts) d += ` L ${p[0]} ${p[1]}`;
+    d += ` L ${t.x} ${t.y}`;
+    return d;
+  }
+  return `M ${f.x} ${f.y} L ${t.x} ${t.y}`;
+}
+
+function shortenPath(pathStr, rStart, rEnd) {
+  const parts = pathStr.replace(/M\s*/, '').split(/\s*L\s*/);
+  const points = parts.map(p => { const [x, y] = p.trim().split(/[\s,]+/).map(Number); return { x, y }; });
+  if (points.length < 2) return pathStr;
+
+  const first = points[0], second = points[1];
+  const d1 = Math.sqrt((second.x - first.x) ** 2 + (second.y - first.y) ** 2);
+  if (d1 > 0) {
+    const ratio1 = rStart / d1;
+    points[0] = { x: first.x + (second.x - first.x) * ratio1, y: first.y + (second.y - first.y) * ratio1 };
+  }
+
+  const last = points[points.length - 1], prev = points[points.length - 2];
+  const d2 = Math.sqrt((last.x - prev.x) ** 2 + (last.y - prev.y) ** 2);
+  if (d2 > 0) {
+    const ratio2 = rEnd / d2;
+    points[points.length - 1] = { x: last.x - (last.x - prev.x) * ratio2, y: last.y - (last.y - prev.y) * ratio2 };
+  }
+
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i++) d += ` L ${points[i].x} ${points[i].y}`;
+  return d;
+}
+
+function getArrowAngle(pathStr) {
+  const parts = pathStr.replace(/M\s*/, '').split(/\s*L\s*/);
+  const points = parts.map(p => { const [x, y] = p.trim().split(/[\s,]+/).map(Number); return { x, y }; });
+  const last = points[points.length - 1], prev = points[points.length - 2];
+  return Math.atan2(last.y - prev.y, last.x - prev.x) * 180 / Math.PI;
+}
+
+function getPathEnd(pathStr) {
+  const parts = pathStr.replace(/M\s*/, '').split(/\s*L\s*/);
+  const points = parts.map(p => { const [x, y] = p.trim().split(/[\s,]+/).map(Number); return { x, y }; });
+  return points[points.length - 1];
+}
+
+function getPathMid(pathStr) {
+  const parts = pathStr.replace(/M\s*/, '').split(/\s*L\s*/);
+  const points = parts.map(p => { const [x, y] = p.trim().split(/[\s,]+/).map(Number); return { x, y }; });
+  let totalLen = 0;
+  const segs = [];
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i-1].x, dy = points[i].y - points[i-1].y;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    segs.push({ start: points[i-1], end: points[i], len });
+    totalLen += len;
+  }
+  let target = totalLen / 2, acc = 0;
+  for (const seg of segs) {
+    if (acc + seg.len >= target) {
+      const t = (target - acc) / seg.len;
+      return { x: seg.start.x + (seg.end.x - seg.start.x) * t, y: seg.start.y + (seg.end.y - seg.start.y) * t };
+    }
+    acc += seg.len;
+  }
+  return points[Math.floor(points.length / 2)];
+}
+
+export default function EcosystemMap() {
+  const [activeLoop, setActiveLoop] = useState("all");
+  const [sel, setSel] = useState(null);
+  const [hovConn, setHovConn] = useState(null);
+
+  const isVis = useCallback((c, i) => {
+    if (sel) return c.from === sel || c.to === sel;
+    if (activeLoop === "all") return true;
+    return c.loop === activeLoop;
+  }, [activeLoop, sel]);
+
+  const connColor = (c) => {
+    if (sel) {
+      const other = c.from === sel ? c.to : c.from;
+      return UNITS.find(u => u.id === other)?.color || "#666";
+    }
+    return LOOPS.find(l => l.id === c.loop)?.color || "#666";
+  };
+
+  const paths = useMemo(() => CONNECTIONS.map(c => {
+    const f = UNITS.find(u => u.id === c.from);
+    const t = UNITS.find(u => u.id === c.to);
+    const raw = buildPath(c.from, c.to, c.pts);
+    return shortenPath(raw, f.r + 4, t.r + 4);
+  }), []);
+
+  const sd = UNITS.find(u => u.id === sel);
+  const inb = CONNECTIONS.filter(c => c.to === sel);
+  const out = CONNECTIONS.filter(c => c.from === sel);
+
+  return (
+    <div style={{ width: "100%", minHeight: "100vh", background: "#09090b", fontFamily: "'JetBrains Mono','SF Mono','Courier New',monospace", color: "#e0e0e0", display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 16px", boxSizing: "border-box" }}>
+      <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+
+      <div style={{ textAlign: "center", marginBottom: 18 }}>
+        <div style={{ fontSize: 10, letterSpacing: 5, color: "#444", marginBottom: 6 }}>TAPFORCE x DAMIAN</div>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: "#fff", letterSpacing: -0.5 }}>THE FACTORY</h1>
+        <div style={{ fontSize: 9, color: "#3a3a3a", marginTop: 5 }}>click units to inspect. hover arrows for details. filter by loop.</div>
+      </div>
+
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", marginBottom: 16 }}>
+        {LOOPS.map(l => (
+          <button key={l.id} onClick={() => { setActiveLoop(l.id); setSel(null); }}
+            style={{ padding: "5px 14px", borderRadius: 20, border: `1px solid ${activeLoop === l.id ? l.color : "#222"}`, background: activeLoop === l.id ? l.color + "14" : "transparent", color: activeLoop === l.id ? l.color : "#555", fontSize: 9, fontFamily: "inherit", cursor: "pointer", letterSpacing: 0.5, fontWeight: activeLoop === l.id ? 600 : 400, transition: "all 0.15s" }}
+          >{l.label}</button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 16, width: "100%", maxWidth: 1140, flexWrap: "wrap", justifyContent: "center" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", maxWidth: 760, aspectRatio: `${W}/${H}`, borderRadius: 16, border: "1px solid #151515", background: "#0c0c0e" }}>
+          
+          {/* Ownership regions */}
+          <rect x={40} y={110} width={280} height={310} rx={20} fill="#c8ff0003" stroke="#c8ff0010" strokeWidth={1} strokeDasharray="4 4"/>
+          <text x={55} y={135} fill="#c8ff0025" fontSize="9" fontWeight="600" letterSpacing="3">TAPFORCE</text>
+          
+          <rect x={580} y={110} width={280} height={310} rx={20} fill="#3b82f603" stroke="#3b82f610" strokeWidth={1} strokeDasharray="4 4"/>
+          <text x={595} y={135} fill="#3b82f625" fontSize="9" fontWeight="600" letterSpacing="3">DAMIAN</text>
+
+          {/* Connections */}
+          {CONNECTIONS.map((c, i) => {
+            const vis = isVis(c, i);
+            const isHov = hovConn === i;
+            const color = vis ? connColor(c) : "#1a1a1a";
+            const end = getPathEnd(paths[i]);
+            const angle = getArrowAngle(paths[i]);
+            const mid = getPathMid(paths[i]);
+            const active = vis && (activeLoop !== "all" || !!sel);
+
+            return (
+              <g key={i}>
+                {/* Fat invisible hitbox */}
+                <path d={paths[i]} fill="none" stroke="transparent" strokeWidth={16} style={{ cursor: "pointer" }}
+                  onMouseEnter={() => setHovConn(i)} onMouseLeave={() => setHovConn(null)}/>
+                
+                <path d={paths[i]} fill="none" stroke={color} strokeWidth={isHov ? 3 : active ? 2 : 1} opacity={vis ? (isHov ? 1 : 0.7) : 0.08}
+                  strokeDasharray={active ? "6 3" : "none"} style={{ transition: "opacity 0.2s, stroke-width 0.15s" }}>
+                  {active && <animate attributeName="stroke-dashoffset" from="18" to="0" dur="0.8s" repeatCount="indefinite"/>}
+                </path>
+                
+                {vis && <polygon points="-6,-3.5 0,0 -6,3.5" fill={color} opacity={isHov ? 1 : 0.7} transform={`translate(${end.x},${end.y}) rotate(${angle})`}/>}
+
+                {isHov && vis && (
+                  <g style={{ pointerEvents: "none" }}>
+                    <rect x={mid.x - c.label.length * 3.1 - 6} y={mid.y - 11} width={c.label.length * 6.2 + 12} height={20} rx={5} fill="#111" stroke={color} strokeWidth={0.8}/>
+                    <text x={mid.x} y={mid.y + 3} textAnchor="middle" fill="#ddd" fontSize="8.5" fontFamily="'JetBrains Mono',monospace">{c.label}</text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
+
+          {/* Nodes */}
+          {UNITS.map(u => {
+            const isSel = sel === u.id;
+            const isCon = sel ? CONNECTIONS.some(c => (c.from === sel && c.to === u.id) || (c.to === sel && c.from === u.id)) || u.id === sel : true;
+            const op = sel ? (isCon ? 1 : 0.15) : 1;
+
+            return (
+              <g key={u.id} style={{ cursor: "pointer", opacity: op, transition: "opacity 0.25s" }}
+                onClick={() => setSel(sel === u.id ? null : u.id)}>
+                
+                {isSel && <circle cx={u.x} cy={u.y} r={u.r + 10} fill="none" stroke={u.color} strokeWidth={1} opacity={0.25}>
+                  <animate attributeName="r" values={`${u.r + 8};${u.r + 16};${u.r + 8}`} dur="2.5s" repeatCount="indefinite"/>
+                  <animate attributeName="opacity" values="0.25;0.05;0.25" dur="2.5s" repeatCount="indefinite"/>
+                </circle>}
+
+                <circle cx={u.x} cy={u.y} r={u.r} fill="#111" stroke={isSel ? u.color : "#1e1e1e"} strokeWidth={isSel ? 2 : 1}/>
+                <circle cx={u.x} cy={u.y} r={u.r - 1} fill={u.color + "06"}/>
+                
+                {u.id === "agency" ? (
+                  <>
+                    <text x={u.x} y={u.y - 14} textAnchor="middle" fill={u.color} fontSize="9" fontWeight="700" letterSpacing="1.5">THE</text>
+                    <text x={u.x} y={u.y + 2} textAnchor="middle" fill={u.color} fontSize="11" fontWeight="700" letterSpacing="1.5">AGENCY</text>
+                    <text x={u.x} y={u.y + 18} textAnchor="middle" fill="#555" fontSize="7.5" fontWeight="300">{u.short}</text>
+                    <text x={u.x} y={u.y + 32} textAnchor="middle" fill="#2a2a2a" fontSize="6.5" fontWeight="500">CENTER</text>
+                  </>
+                ) : u.id === "studio" ? (
+                  <>
+                    <text x={u.x} y={u.y - 10} textAnchor="middle" fill={u.color} fontSize="8" fontWeight="700" letterSpacing="1">VENTURE</text>
+                    <text x={u.x} y={u.y + 4} textAnchor="middle" fill={u.color} fontSize="8" fontWeight="700" letterSpacing="1">STUDIO</text>
+                    <text x={u.x} y={u.y + 18} textAnchor="middle" fill="#555" fontSize="7" fontWeight="300">{u.short}</text>
+                    <text x={u.x} y={u.y + 30} textAnchor="middle" fill="#2a2a2a" fontSize="6" fontWeight="500">SHARED</text>
+                  </>
+                ) : (
+                  <>
+                    <text x={u.x} y={u.y - 6} textAnchor="middle" fill={u.color} fontSize="7.5" fontWeight="700" letterSpacing="0.8">{u.label}</text>
+                    <text x={u.x} y={u.y + 7} textAnchor="middle" fill="#666" fontSize="6.5" fontWeight="300">{u.short}</text>
+                    <text x={u.x} y={u.y + 19} textAnchor="middle" fill="#2a2a2a" fontSize="6" fontWeight="500">{u.owner.toUpperCase()}</text>
+                  </>
+                )}
+              </g>
+            );
+          })}
+
+          {/* Portfolio strip */}
+          <line x1={100} y1={530} x2={800} y2={530} stroke="#1a1a1a" strokeWidth={1}/>
+          <text x={100} y={555} fill="#333" fontSize="8" fontWeight="600" letterSpacing="3">PORTFOLIO</text>
+          
+          {PORTFOLIO.map((p, i) => {
+            const bx = 140 + i * 170;
+            return (
+              <g key={i}>
+                <rect x={bx} y={570} width={140} height={44} rx={8} fill="#111" stroke="#1e1e1e" strokeWidth={1}/>
+                <text x={bx + 70} y={588} textAnchor="middle" fill="#c8ff00" fontSize="8" fontWeight="600" letterSpacing="1">{p.name}</text>
+                <text x={bx + 70} y={602} textAnchor="middle" fill="#444" fontSize="7" fontWeight="300">{p.vertical}</text>
+              </g>
+            );
+          })}
+          
+          {/* Arrow from studio to portfolio */}
+          <line x1={540} y1={476} x2={540} y2={530} stroke="#ffffff10" strokeWidth={1} strokeDasharray="3 3"/>
+          <text x={555} y={508} fill="#2a2a2a" fontSize="7">spins off</text>
+
+        </svg>
+
+        {/* Side panel */}
+        <div style={{ flex: "1 1 280px", maxWidth: 340, minWidth: 260 }}>
+          {sd ? (
+            <div style={{ background: "#111", borderRadius: 14, border: `1px solid ${sd.color}18`, padding: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: sd.color }}/>
+                <span style={{ fontSize: 8, color: "#444", letterSpacing: 2 }}>{sd.owner === "shared" ? "SHARED" : sd.owner.toUpperCase()}</span>
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 2 }}>{sd.label}</div>
+              <div style={{ fontSize: 10, color: "#555", marginBottom: 18 }}>{sd.short}</div>
+
+              <div style={{ fontSize: 8, color: "#333", letterSpacing: 2, marginBottom: 8 }}>PRODUCES</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 22 }}>
+                {sd.produces.map((p, i) => (
+                  <span key={i} style={{ padding: "3px 8px", borderRadius: 12, background: sd.color + "0c", border: `1px solid ${sd.color}20`, fontSize: 8.5, color: sd.color + "cc" }}>{p}</span>
+                ))}
+              </div>
+
+              {out.length > 0 && <>
+                <div style={{ fontSize: 8, color: "#333", letterSpacing: 2, marginBottom: 8 }}>FEEDS INTO</div>
+                {out.map((c, i) => {
+                  const tgt = UNITS.find(u => u.id === c.to);
+                  return (
+                    <div key={i} style={{ marginBottom: 10, paddingLeft: 10, borderLeft: `2px solid ${tgt.color}30`, cursor: "pointer" }}
+                      onClick={(e) => { e.stopPropagation(); setSel(tgt.id); }}>
+                      <div style={{ fontSize: 10, color: tgt.color, fontWeight: 600 }}>{tgt.label}</div>
+                      <div style={{ fontSize: 8.5, color: "#444", marginTop: 2 }}>{c.label}</div>
+                    </div>
+                  );
+                })}
+              </>}
+
+              {inb.length > 0 && <>
+                <div style={{ fontSize: 8, color: "#333", letterSpacing: 2, marginBottom: 8, marginTop: 18 }}>RECEIVES FROM</div>
+                {inb.map((c, i) => {
+                  const src = UNITS.find(u => u.id === c.from);
+                  return (
+                    <div key={i} style={{ marginBottom: 10, paddingLeft: 10, borderLeft: `2px solid ${src.color}30`, cursor: "pointer" }}
+                      onClick={(e) => { e.stopPropagation(); setSel(src.id); }}>
+                      <div style={{ fontSize: 10, color: src.color, fontWeight: 600 }}>{src.label}</div>
+                      <div style={{ fontSize: 8.5, color: "#444", marginTop: 2 }}>{c.label}</div>
+                    </div>
+                  );
+                })}
+              </>}
+
+              <button onClick={() => setSel(null)} style={{ marginTop: 18, padding: "6px 14px", borderRadius: 8, border: "1px solid #222", background: "transparent", color: "#555", fontSize: 9, fontFamily: "inherit", cursor: "pointer", letterSpacing: 0.5 }}>
+                ← back to overview
+              </button>
+            </div>
+          ) : (
+            <div style={{ background: "#111", borderRadius: 14, border: "1px solid #161616", padding: 20 }}>
+              <div style={{ fontSize: 8, color: "#c8ff00", letterSpacing: 2, marginBottom: 8 }}>ECOSYSTEM</div>
+              <div style={{ fontSize: 11, color: "#666", lineHeight: 1.8, marginBottom: 18 }}>
+                7 units. 17 connections. every output becomes input for another unit. no dead ends.
+              </div>
+
+              <div style={{ fontSize: 8, color: "#333", letterSpacing: 2, marginBottom: 10 }}>UNITS</div>
+              {UNITS.map(u => (
+                <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7, cursor: "pointer", padding: "4px 6px", borderRadius: 6, transition: "background 0.15s" }}
+                  onClick={() => setSel(u.id)}
+                  onMouseEnter={e => e.currentTarget.style.background = "#1a1a1a"}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: u.color, flexShrink: 0 }}/>
+                  <span style={{ fontSize: 9, color: "#888", flex: 1 }}>{u.label}</span>
+                  <span style={{ fontSize: 7.5, color: "#2a2a2a" }}>{u.owner === "shared" ? "SHARED" : u.owner.toUpperCase()}</span>
+                </div>
+              ))}
+
+              <div style={{ marginTop: 18, padding: 12, borderRadius: 8, background: "#0e0e0e", border: "1px solid #1a1a1a" }}>
+                <div style={{ fontSize: 8, color: "#3b82f6", letterSpacing: 2, marginBottom: 6 }}>ROUTING</div>
+                <div style={{ fontSize: 8.5, color: "#555", lineHeight: 1.7 }}>
+                  AI systems → Agency<br/>
+                  Fractional operator → Marketplace<br/>
+                  Validated idea → Venture Studio<br/>
+                  Creative needs → Proper Yellow
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
